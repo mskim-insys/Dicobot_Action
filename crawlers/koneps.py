@@ -199,6 +199,11 @@ def run_koneps(
     history_mgr: HistoryManager,
 ) -> int:
     """나라장터 공고 수집, 필터링, 중복 확인 및 웹훅 전송 파이프라인 실행"""
+    target_webhook = os.getenv("DISCORD_KONEPS_WEBHOOK_URL", "").strip() or webhook_url
+    if not target_webhook and not getattr(args, "dry_run", False):
+        logger.warning("[나라장터] 전송할 디스코드 웹훅 URL이 설정되지 않았습니다.")
+        return 0
+
     api_key = os.getenv("DATA_GO_KR_API_KEY", "").strip()
     if not api_key:
         logger.error("[나라장터] DATA_GO_KR_API_KEY 환경변수가 설정되지 않아 건너뜁니다.")
@@ -261,7 +266,7 @@ def run_koneps(
 
     sent_count = 0
     for notice in to_send:
-        if send_notice_webhook(webhook_url, notice):
+        if send_notice_webhook(target_webhook, notice):
             sent_count += 1
             n_key = get_notice_key(notice)
             if n_key:

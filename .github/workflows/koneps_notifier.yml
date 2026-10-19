@@ -1,4 +1,4 @@
-name: 나라장터 및 뉴스 디스코드 알리미
+name: 나라장터 및 모닝 브리핑(뉴스 & 논문) 디스코드 알리미
 
 on:
   schedule:
@@ -29,11 +29,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 공고 및 뉴스 수집 디스코드 전송
+      - name: 공고, 뉴스, 논문 수집 디스코드 전송
         env:
           DATA_GO_KR_API_KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_KONEPS_WEBHOOK_URL: ${{ secrets.DISCORD_KONEPS_WEBHOOK_URL }}
           DISCORD_NEWS_WEBHOOK_URL: ${{ secrets.DISCORD_NEWS_WEBHOOK_URL }}
+          DISCORD_HN_WEBHOOK_URL: ${{ secrets.DISCORD_HN_WEBHOOK_URL }}
+          DISCORD_ARXIV_WEBHOOK_URL: ${{ secrets.DISCORD_ARXIV_WEBHOOK_URL }}
           TARGET_KEYWORDS: ${{ vars.TARGET_KEYWORDS || '비전,머신비전,AI,인공지능,딥러닝,스마트,스마트팩토리,데이터,검사기,소프트웨어,SW' }}
           ENABLE_PRICE_FILTER: ${{ vars.ENABLE_PRICE_FILTER || 'false' }}
           MIN_PRICE: ${{ vars.MIN_PRICE || '50000000' }}

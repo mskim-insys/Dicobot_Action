@@ -1,6 +1,6 @@
 """
 main.py
-디스코드 통합 알리미 (나라장터 공고 & 뉴스) 메인 실행 스크립트
+디스코드 통합 알리미 (나라장터 공고, 테크 뉴스, Hacker News, AI 논문 브리핑) 메인 실행 스크립트
 """
 
 import argparse
@@ -12,8 +12,15 @@ from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
 
-from common.discord_webhook import build_news_embed, build_notice_embed, send_raw_webhook
+from common.discord_webhook import (
+    build_news_embed,
+    build_notice_embed,
+    build_paper_embed,
+    send_raw_webhook,
+)
 from common.history import HistoryManager
+from crawlers.arxiv import run_arxiv
+from crawlers.hackernews import run_hackernews
 from crawlers.koneps import run_koneps
 from crawlers.news import run_news
 
@@ -33,60 +40,128 @@ logging.basicConfig(
 logger = logging.getLogger("DiscordBots")
 
 
-def send_mock_test_card(webhook_url: str, target: str = "all") -> None:
+def get_webhook(target_type: str) -> str:
+    """타깃별 전용 웹훅 우선 조회, 없으면 공통 DISCORD_WEBHOOK_URL 조회"""
+    common = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
+    if target_type == "koneps":
+        return os.getenv("DISCORD_KONEPS_WEBHOOK_URL", "").strip() or common
+    if target_type in ("news", "geeknews"):
+        return os.getenv("DISCORD_NEWS_WEBHOOK_URL", "").strip() or common
+    if target_type == "hackernews":
+        return (
+            os.getenv("DISCORD_HN_WEBHOOK_URL", "").strip()
+            or os.getenv("DISCORD_NEWS_WEBHOOK_URL", "").strip()
+            or common
+        )
+    if target_type == "arxiv":
+        return os.getenv("DISCORD_ARXIV_WEBHOOK_URL", "").strip() or common
+    return common
+
+
+def send_mock_test_card(target: str = "all") -> None:
     """웹훅 연결 및 Embed 디자인 테스트용 가상 카드 전송"""
     logger.info("디스코드 웹훅 테스트 카드를 전송합니다... (타깃: %s)", target)
 
+    # 1. 나라장터 카드 테스트
     if target in ("all", "koneps"):
-        mock_notice = {
-            "bidNtceNo": "20261019001",
-            "bidNtceOrd": "00",
-            "bidNtceNm": "[테스트] 2026년 AI 스마트팩토리 비전 검사 시스템 구축 용역",
-            "ntceInsttNm": "중소벤처기업진흥공단",
-            "dminsttNm": "스마트제조혁신추진단",
-            "presmptPrce": 250000000,
-            "formatted_price": "2억 5,000만 원",
-            "bidNtceDt": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "bidClseDt": "2026-10-31 18:00",
-            "matched_keywords": ["머신비전", "AI", "스마트팩토리"],
-            "bidNtceDtlUrl": "https://www.g2b.go.kr",
-        }
-        embed = build_notice_embed(mock_notice)
-        send_raw_webhook(webhook_url, {"username": "나라장터 알리미", "embeds": [embed]})
-        logger.info("✅ [나라장터] 테스트 카드 전송 완료!")
+        url = get_webhook("koneps")
+        if url:
+            mock_notice = {
+                "bidNtceNo": "20261019001",
+                "bidNtceOrd": "00",
+                "bidNtceNm": "[테스트] 2026년 AI 스마트팩토리 비전 검사 시스템 구축 용역",
+                "ntceInsttNm": "중소벤처기업진흥공단",
+                "dminsttNm": "스마트제조혁신추진단",
+                "presmptPrce": 250000000,
+                "formatted_price": "2억 5,000만 원",
+                "bidNtceDt": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "bidClseDt": "2026-10-31 18:00",
+                "matched_keywords": ["머신비전", "AI", "스마트팩토리"],
+                "bidNtceDtlUrl": "https://www.g2b.go.kr",
+            }
+            embed = build_notice_embed(mock_notice)
+            send_raw_webhook(url, {"username": "나라장터 알리미", "embeds": [embed]})
+            logger.info("✅ [나라장터] 테스트 카드 전송 완료!")
+        else:
+            logger.warning("⚠️ [나라장터] 웹훅 URL이 없어 테스트를 건너뜁니다.")
 
-    if target in ("all", "news"):
-        mock_news = {
-            "title": "[테스트] 오픈AI, 차세대 멀티모달 추론 AI 모델 공개",
-            "url": "https://news.naver.com",
-            "press": "테크뉴스",
-            "summary": "인공지능 분야의 새로운 패러다임을 열 차세대 추론 모델이 정식 공개되었습니다.",
-            "published_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "matched_keywords": ["AI", "추론"],
-        }
-        news_webhook_url = os.getenv("DISCORD_NEWS_WEBHOOK_URL", "").strip() or webhook_url
-        embed = build_news_embed(mock_news)
-        send_raw_webhook(news_webhook_url, {"username": "디스코드 뉴스 알리미", "embeds": [embed]})
-        logger.info("✅ [뉴스] 테스트 카드 전송 완료!")
+    # 2. 테크 뉴스 (GeekNews) 카드 테스트
+    if target in ("all", "news", "geeknews"):
+        url = get_webhook("geeknews")
+        if url:
+            mock_news = {
+                "title": "[테스트] 긱뉴스 주간 AI & 테크 하이라이트",
+                "url": "https://news.hada.io",
+                "source": "GeekNews",
+                "summary": "• 차세대 AI 에이전트 아키텍처 오픈소스 공개\n• 최신 LLM 경량화 모델 벤치마크 비교\n• 개발자를 위한 생산성 도구 모음",
+                "published_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            }
+            embed = build_news_embed(mock_news)
+            send_raw_webhook(url, {"username": "긱뉴스 트렌드", "embeds": [embed]})
+            logger.info("✅ [긱뉴스] 테스트 카드 전송 완료!")
+        else:
+            logger.warning("⚠️ [긱뉴스] 웹훅 URL이 없어 테스트를 건너뜁니다.")
+
+    # 3. Hacker News 카드 테스트
+    if target in ("all", "news", "hackernews"):
+        url = get_webhook("hackernews")
+        if url:
+            mock_hn = {
+                "title": "[테스트] Show HN: Modern Open-Source AI Agent Framework",
+                "url": "https://github.com/example/ai-agent",
+                "hn_url": "https://news.ycombinator.com/item?id=99999999",
+                "source": "HackerNews",
+                "points": 342,
+                "comments": 158,
+                "published_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "summary": "Show HN: 초고속 비동기 파이썬 기반의 새로운 경량 AI 에이전트 프레임워크가 릴리즈되었습니다.",
+            }
+            embed = build_news_embed(mock_hn)
+            send_raw_webhook(url, {"username": "Hacker News 트렌드", "embeds": [embed]})
+            logger.info("✅ [Hacker News] 테스트 카드 전송 완료!")
+        else:
+            logger.warning("⚠️ [Hacker News] 웹훅 URL이 없어 테스트를 건너뜁니다.")
+
+    # 4. Arxiv AI 논문 카드 테스트
+    if target in ("all", "arxiv"):
+        url = get_webhook("arxiv")
+        if url:
+            mock_paper = {
+                "title": "[테스트] Real-time Object Detection with Next-Gen Vision Transformers",
+                "url": "https://arxiv.org/abs/2610.12345",
+                "category": "cs.CV, cs.AI",
+                "authors": ["홍길동", "John Doe", "Jane Smith"],
+                "abstract": "본 논문에서는 엣지 디바이스에서 초당 120 FPS로 동작하는 차세대 비전 트랜스포머 기반의 실시간 객체 탐지 알고리즘을 제안합니다.",
+                "pdf_url": "https://arxiv.org/pdf/2610.12345.pdf",
+            }
+            embed = build_paper_embed(mock_paper)
+            send_raw_webhook(url, {"username": "Arxiv 논문 브리핑", "embeds": [embed]})
+            logger.info("✅ [Arxiv 논문] 테스트 카드 전송 완료!")
+        else:
+            logger.warning("⚠️ [Arxiv 논문] 웹훅 URL이 없어 테스트를 건너뜁니다.")
 
 
 def execute_pipeline(args: argparse.Namespace) -> None:
-    """공통 이력 관리자 생성 및 선택된 크롤러(나라장터, 뉴스 등) 순차 실행"""
+    """공통 이력 관리자 생성 및 선택된 크롤러 순차 실행"""
     load_dotenv(override=True)
 
-    webhook_url = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
+    common_webhook = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
 
     # 웹훅 단독 테스트 모드
     if args.test_webhook:
-        if not webhook_url:
-            logger.error(".env 파일에 DISCORD_WEBHOOK_URL이 설정되지 않았습니다.")
-            sys.exit(1)
-        send_mock_test_card(webhook_url, target=args.target)
+        send_mock_test_card(target=args.target)
         return
 
-    # 웹훅 필수 검증 (dry-run이 아닐 때)
-    if not webhook_url and not args.dry_run:
-        logger.error("필수 환경변수 DISCORD_WEBHOOK_URL이 설정되지 않았습니다.")
+    # 웹훅 유효성 검증 (dry-run이 아닐 때)
+    any_webhook = (
+        common_webhook
+        or os.getenv("DISCORD_KONEPS_WEBHOOK_URL")
+        or os.getenv("DISCORD_NEWS_WEBHOOK_URL")
+        or os.getenv("DISCORD_HN_WEBHOOK_URL")
+        or os.getenv("DISCORD_ARXIV_WEBHOOK_URL")
+    )
+    if not any_webhook and not args.dry_run:
+        logger.error("디스코드 웹훅 URL이 하나도 설정되지 않았습니다. .env 파일을 확인해주세요.")
         sys.exit(1)
 
     history_mgr = HistoryManager()
@@ -99,20 +174,36 @@ def execute_pipeline(args: argparse.Namespace) -> None:
     # 1. 나라장터 공고 수집 실행
     if args.target in ("all", "koneps"):
         try:
-            sent = run_koneps(args, webhook_url, history_mgr)
+            sent = run_koneps(args, common_webhook, history_mgr)
             total_sent += sent
         except Exception as e:
             logger.error("[나라장터] 파이프라인 실행 중 오류: %s", e)
 
-    # 2. 뉴스 수집 실행
-    if args.target in ("all", "news"):
+    # 2. 국내 테크 뉴스 (GeekNews) 수집 실행
+    if args.target in ("all", "news", "geeknews"):
         try:
-            sent = run_news(args, webhook_url, history_mgr)
+            sent = run_news(args, common_webhook, history_mgr)
             total_sent += sent
         except Exception as e:
-            logger.error("[뉴스] 파이프라인 실행 중 오류: %s", e)
+            logger.error("[긱뉴스] 파이프라인 실행 중 오류: %s", e)
 
-    # 3. 전송 이력 저장
+    # 3. 글로벌 테크 뉴스 (Hacker News) 수집 실행
+    if args.target in ("all", "news", "hackernews"):
+        try:
+            sent = run_hackernews(args, common_webhook, history_mgr)
+            total_sent += sent
+        except Exception as e:
+            logger.error("[HackerNews] 파이프라인 실행 중 오류: %s", e)
+
+    # 4. Arxiv AI 논문 수집 실행 (cs.AI + cs.CV)
+    if args.target in ("all", "arxiv"):
+        try:
+            sent = run_arxiv(args, common_webhook, history_mgr)
+            total_sent += sent
+        except Exception as e:
+            logger.error("[Arxiv] 파이프라인 실행 중 오류: %s", e)
+
+    # 5. 전송 이력 저장
     history_mgr.save()
     logger.info("==========================================")
     logger.info("🎉 전체 작업 완료: 총 %d건 신규 전송됨", total_sent)
@@ -120,12 +211,12 @@ def execute_pipeline(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="디스코드 통합 알리미 (나라장터 & 뉴스)")
+    parser = argparse.ArgumentParser(description="디스코드 통합 알리미 (나라장터, 긱뉴스, 해커뉴스, Arxiv)")
     parser.add_argument(
         "--target",
-        choices=["all", "koneps", "news"],
+        choices=["all", "koneps", "news", "geeknews", "hackernews", "arxiv"],
         default="all",
-        help="실행할 크롤러 대상 선택 (all: 전체, koneps: 나라장터만, news: 뉴스만, 기본: all)",
+        help="실행 대상 선택 (all: 전체, news: 뉴스전체, geeknews: 긱뉴스만, hackernews: 해커뉴스만, arxiv: AI논문만, koneps: 나라장터만, 기본: all)",
     )
     parser.add_argument("--test-webhook", action="store_true", help="가상 카드를 전송하여 디스코드 웹훅을 테스트합니다.")
     parser.add_argument("--dry-run", action="store_true", help="실제 전송 없이 수집/필터링 결과만 콘솔에 출력합니다.")

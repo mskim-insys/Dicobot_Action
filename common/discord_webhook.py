@@ -17,14 +17,18 @@ logger = logging.getLogger(__name__)
 
 
 def clean_html(raw_html: Optional[str]) -> str:
-    """HTML 태그 제거 및 엔티티 언이스케이프"""
+    """HTML 태그 제거 및 <li> 태그를 마크다운 글머리 기호(• )로 변환"""
     if not raw_html:
         return ""
-    # 태그 제거
-    clean = re.sub(r"<[^>]+>", " ", raw_html)
-    # 공백 정규화 및 HTML 특수문자 변환 (&amp; 등)
+    # <li> 태그를 글머리 기호로 변환
+    text = re.sub(r"<li[^>]*>", "\n• ", raw_html)
+    # 나머지 HTML 태그 제거
+    clean = re.sub(r"<[^>]+>", " ", text)
+    # HTML 특수문자 변환 (&amp;, &quot; 등)
     clean = html.unescape(clean)
-    clean = re.sub(r"\s+", " ", clean).strip()
+    # 연속 공백 및 줄바꿈 정돈
+    clean = re.sub(r"[ \t]+", " ", clean)
+    clean = re.sub(r"\n\s+", "\n", clean).strip()
     return clean
 
 
@@ -132,6 +136,9 @@ def build_tech_trend_embed(item: Dict[str, Any]) -> Dict[str, Any]:
         pts = item.get("points", 0)
         cmts = item.get("comments", 0)
         fields.append({"name": "🔥 반응", "value": f"추천 {pts}개 | 댓글 {cmts}개", "inline": True})
+
+    if item.get("hn_url") and item.get("hn_url") != url:
+        fields.append({"name": "💬 HN 토론", "value": f"[댓글 보기]({item['hn_url']})", "inline": True})
 
     return {
         "title": f"🔥 [{source}] {title[:220]}",
