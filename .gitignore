@@ -3,6 +3,7 @@
 
 # Notice history (deduplication)
 sent_notices.json
+sent_history.json
 
 # Python
 __pycache__/

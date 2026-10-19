@@ -1,21 +1,21 @@
 """
 main.py
-나라장터 공고 수집 및 디스코드 웹훅 전송 메인 실행 스크립트
+디스코드 통합 알리미 (나라장터 공고 & 뉴스) 메인 실행 스크립트
 """
 
 import argparse
-import json
 import logging
 import os
 import sys
 import time
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Set
 
 from dotenv import load_dotenv
 
-import discord_webhook
-import koneps_client
+from common.discord_webhook import build_news_embed, build_notice_embed, send_raw_webhook
+from common.history import HistoryManager
+from crawlers.koneps import run_koneps
+from crawlers.news import run_news
 
 if sys.platform == "win32":
     try:
@@ -30,73 +30,50 @@ logging.basicConfig(
     format="[%(asctime)s] %(levelname)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-logger = logging.getLogger("KonepsNotifier")
-
-SENT_HISTORY_FILE = "sent_notices.json"
+logger = logging.getLogger("DiscordBots")
 
 
-def load_sent_history() -> Set[str]:
-    """이미 전송된 공고 ID 목록을 불러옵니다."""
-    if not os.path.exists(SENT_HISTORY_FILE):
-        return set()
-    try:
-        with open(SENT_HISTORY_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            return set(data.get("sent_ids", []))
-    except Exception as e:
-        logger.warning("전송 이력 파일(%s) 로드 실패: %s", SENT_HISTORY_FILE, e)
-        return set()
+def send_mock_test_card(webhook_url: str, target: str = "all") -> None:
+    """웹훅 연결 및 Embed 디자인 테스트용 가상 카드 전송"""
+    logger.info("디스코드 웹훅 테스트 카드를 전송합니다... (타깃: %s)", target)
 
+    if target in ("all", "koneps"):
+        mock_notice = {
+            "bidNtceNo": "20261019001",
+            "bidNtceOrd": "00",
+            "bidNtceNm": "[테스트] 2026년 AI 스마트팩토리 비전 검사 시스템 구축 용역",
+            "ntceInsttNm": "중소벤처기업진흥공단",
+            "dminsttNm": "스마트제조혁신추진단",
+            "presmptPrce": 250000000,
+            "formatted_price": "2억 5,000만 원",
+            "bidNtceDt": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "bidClseDt": "2026-10-31 18:00",
+            "matched_keywords": ["머신비전", "AI", "스마트팩토리"],
+            "bidNtceDtlUrl": "https://www.g2b.go.kr",
+        }
+        embed = build_notice_embed(mock_notice)
+        send_raw_webhook(webhook_url, {"username": "나라장터 알리미", "embeds": [embed]})
+        logger.info("✅ [나라장터] 테스트 카드 전송 완료!")
 
-def save_sent_history(sent_ids: Set[str], max_history: int = 2000) -> None:
-    """전송된 공고 ID 목록을 저장합니다 (최대 max_history개 보관)."""
-    # 최신 순으로 최대 보관 개수 제한
-    id_list = list(sent_ids)
-    if len(id_list) > max_history:
-        id_list = id_list[-max_history:]
-    try:
-        with open(SENT_HISTORY_FILE, "w", encoding="utf-8") as f:
-            json.dump({"sent_ids": id_list, "updated_at": datetime.now().isoformat()}, f, indent=2, ensure_ascii=False)
-    except Exception as e:
-        logger.error("전송 이력 파일 저장 실패: %s", e)
-
-
-def get_notice_key(notice: Dict[str, Any]) -> str:
-    """공고 고유 식별자 반환 (공고번호-차수)"""
-    no = notice.get("bidNtceNo", "")
-    ord_no = notice.get("bidNtceOrd", "00")
-    return f"{no}_{ord_no}" if no else ""
-
-
-def send_mock_test_card(webhook_url: str) -> None:
-    """웹훅 연결 및 Embed 디자인 테스트용 가상 공고 전송"""
-    mock_notice = {
-        "bidNtceNo": "20261016001",
-        "bidNtceOrd": "00",
-        "bidNtceNm": "[테스트] 2026년 스마트공장 머신비전 AI 품질검사 시스템 고도화 용역",
-        "ntceInsttNm": "중소벤처기업진흥공단",
-        "dminsttNm": "스마트제조혁신추진단",
-        "presmptPrce": 250000000,
-        "formatted_price": "2억 5,000만 원",
-        "bidNtceDt": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "bidClseDt": "2026-10-31 18:00",
-        "matched_keywords": ["머신비전", "AI", "스마트공장"],
-        "bidNtceDtlUrl": "https://www.g2b.go.kr",
-    }
-    logger.info("디스코드 웹훅 테스트 카드를 전송합니다...")
-    success = discord_webhook.send_notice_webhook(webhook_url, mock_notice)
-    if success:
-        logger.info("✅ 테스트 웹훅 전송 성공! 디스코드 채널을 확인해보세요.")
-    else:
-        logger.error("❌ 테스트 웹훅 전송 실패! 웹훅 URL을 확인해주세요.")
+    if target in ("all", "news"):
+        mock_news = {
+            "title": "[테스트] 오픈AI, 차세대 멀티모달 추론 AI 모델 공개",
+            "url": "https://news.naver.com",
+            "press": "테크뉴스",
+            "summary": "인공지능 분야의 새로운 패러다임을 열 차세대 추론 모델이 정식 공개되었습니다.",
+            "published_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "matched_keywords": ["AI", "추론"],
+        }
+        news_webhook_url = os.getenv("DISCORD_NEWS_WEBHOOK_URL", "").strip() or webhook_url
+        embed = build_news_embed(mock_news)
+        send_raw_webhook(news_webhook_url, {"username": "디스코드 뉴스 알리미", "embeds": [embed]})
+        logger.info("✅ [뉴스] 테스트 카드 전송 완료!")
 
 
 def execute_pipeline(args: argparse.Namespace) -> None:
-    """공고 수집, 필터링, 중복 확인 및 웹훅 전송 파이프라인 1회 실행"""
-    # .env 파일 로드
+    """공통 이력 관리자 생성 및 선택된 크롤러(나라장터, 뉴스 등) 순차 실행"""
     load_dotenv(override=True)
 
-    api_key = os.getenv("DATA_GO_KR_API_KEY", "").strip()
     webhook_url = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
 
     # 웹훅 단독 테스트 모드
@@ -104,148 +81,75 @@ def execute_pipeline(args: argparse.Namespace) -> None:
         if not webhook_url:
             logger.error(".env 파일에 DISCORD_WEBHOOK_URL이 설정되지 않았습니다.")
             sys.exit(1)
-        send_mock_test_card(webhook_url)
+        send_mock_test_card(webhook_url, target=args.target)
         return
 
-    # 환경변수 검증
-    missing_vars = []
-    if not api_key:
-        missing_vars.append("DATA_GO_KR_API_KEY (공공데이터포털 인증키)")
+    # 웹훅 필수 검증 (dry-run이 아닐 때)
     if not webhook_url and not args.dry_run:
-        missing_vars.append("DISCORD_WEBHOOK_URL (디스코드 웹훅 URL)")
-
-    if missing_vars:
-        logger.error("필수 환경변수가 누락되었습니다:")
-        for v in missing_vars:
-            logger.error("  - %s", v)
-        logger.error(".env 파일에 값을 입력한 후 다시 실행해주세요.")
+        logger.error("필수 환경변수 DISCORD_WEBHOOK_URL이 설정되지 않았습니다.")
         sys.exit(1)
 
-    # 설정값 파싱
-    raw_keywords = os.getenv("TARGET_KEYWORDS", "비전,머신비전,AI,인공지능,딥러닝,스마트,스마트팩토리,데이터,검사기,소프트웨어,SW")
-    keywords = [k.strip() for k in raw_keywords.split(",") if k.strip()]
+    history_mgr = HistoryManager()
+    total_sent = 0
 
-    # 금액 필터 활성화 여부 확인
-    raw_enable_price = os.getenv("ENABLE_PRICE_FILTER", "true").strip().lower()
-    enable_price_filter = raw_enable_price in ("true", "1", "yes", "y")
-    if args.no_price_filter:
-        enable_price_filter = False
+    logger.info("==========================================")
+    logger.info("🚀 디스코드 알리미 파이프라인 가동 (타깃: %s)", args.target)
+    logger.info("==========================================")
 
-    min_price = int(os.getenv("MIN_PRICE", "50000000"))
-    max_price = int(os.getenv("MAX_PRICE", "1000000000"))
-    if min_price == 0 and max_price == 0:
-        enable_price_filter = False
+    # 1. 나라장터 공고 수집 실행
+    if args.target in ("all", "koneps"):
+        try:
+            sent = run_koneps(args, webhook_url, history_mgr)
+            total_sent += sent
+        except Exception as e:
+            logger.error("[나라장터] 파이프라인 실행 중 오류: %s", e)
 
-    lookback_days = args.lookback if args.lookback is not None else int(os.getenv("LOOKBACK_DAYS", "1"))
+    # 2. 뉴스 수집 실행
+    if args.target in ("all", "news"):
+        try:
+            sent = run_news(args, webhook_url, history_mgr)
+            total_sent += sent
+        except Exception as e:
+            logger.error("[뉴스] 파이프라인 실행 중 오류: %s", e)
 
-    start_dt, end_dt = koneps_client.calculate_date_range(lookback_days)
-    logger.info("=== 나라장터 공고 수집 시작 ===")
-    logger.info("조회 기간: %s ~ %s (최근 %d일)", start_dt, end_dt, lookback_days)
-    logger.info("타깃 키워드 (%d개): %s", len(keywords), ", ".join(keywords))
-    if enable_price_filter:
-        logger.info("금액 필터: %s ~ %s", koneps_client.format_price_krw(min_price), koneps_client.format_price_krw(max_price))
-    else:
-        logger.info("금액 필터: 미적용 (모든 금액대 공고 포함)")
-
-    # 1. API 호출
-    try:
-        raw_items, total_count = koneps_client.fetch_bid_notices(
-            api_key=api_key,
-            start_dt=start_dt,
-            end_dt=end_dt,
-            num_of_rows=100,
-            lookback_days=lookback_days,
-        )
-        logger.info("조회 완료: 전체 응답 공고 %d건 (수집된 공고 %d건)", total_count, len(raw_items))
-    except Exception as e:
-        logger.error("조달청 API 호출 중 오류 발생: %s", e)
-        return
-
-    # 2. 키워드 및 금액 필터링
-    matched_notices = koneps_client.filter_bid_notices(
-        items=raw_items,
-        keywords=keywords,
-        min_price=min_price,
-        max_price=max_price,
-        enable_price_filter=enable_price_filter,
-    )
-    logger.info("조건 필터링 통과: %d건", len(matched_notices))
-
-    if not matched_notices:
-        logger.info("조건에 부합하는 새로운 공고가 없습니다.")
-        return
-
-    # 3. 중복 알림 방지 (Deduplication)
-    sent_ids = load_sent_history()
-    to_send: List[Dict[str, Any]] = []
-
-    for notice in matched_notices:
-        n_key = get_notice_key(notice)
-        if not args.force and n_key in sent_ids:
-            continue
-        to_send.append(notice)
-
-    logger.info("신규 전송 대상 공고: %d건 (기존 전송 완료 제외)", len(to_send))
-
-    # Dry-run 모드일 경우 콘솔에만 출력
-    if args.dry_run:
-        logger.info("[Dry Run] 디스코드 전송을 생략하고 수집된 공고 목록을 출력합니다:")
-        for idx, notice in enumerate(to_send, 1):
-            print(f"\n[{idx}] {notice.get('bidNtceNm')}")
-            print(f"    - 기관: {notice.get('ntceInsttNm')} (수요: {notice.get('dminsttNm')})")
-            print(f"    - 금액: {notice.get('formatted_price')}")
-            print(f"    - 마감: {notice.get('bidClseDt')}")
-            print(f"    - 키워드: {', '.join(notice.get('matched_keywords', []))}")
-            print(f"    - 링크: {notice.get('bidNtceDtlUrl')}")
-        return
-
-    if not to_send:
-        logger.info("새로 전송할 공고가 없습니다.")
-        return
-
-    # 4. 디스코드 웹훅 전송
-    logger.info("디스코드 웹훅으로 %d건의 공고 전송을 시작합니다...", len(to_send))
-    sent_count = 0
-    for notice in to_send:
-        success = discord_webhook.send_notice_webhook(webhook_url, notice)
-        if success:
-            sent_count += 1
-            n_key = get_notice_key(notice)
-            if n_key:
-                sent_ids.add(n_key)
-
-    # 5. 전송 이력 저장
-    save_sent_history(sent_ids)
-    logger.info("=== 작업 완료: 총 %d건 중 %d건 전송 성공 ===", len(to_send), sent_count)
+    # 3. 전송 이력 저장
+    history_mgr.save()
+    logger.info("==========================================")
+    logger.info("🎉 전체 작업 완료: 총 %d건 신규 전송됨", total_sent)
+    logger.info("==========================================")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="나라장터 IT/AI 공고 디스코드 알리미")
-    parser.add_argument("--test-webhook", action="store_true", help="가상 공고 카드를 디스코드로 1건 전송하여 웹훅을 테스트합니다.")
-    parser.add_argument("--dry-run", action="store_true", help="실제 디스코드 전송 없이 API 조회 및 필터링 결과만 출력합니다.")
-    parser.add_argument("--force", action="store_true", help="중복 체크를 무시하고 필터링된 모든 공고를 전송합니다.")
-    parser.add_argument("--no-price-filter", action="store_true", help="금액 필터를 해제하고 키워드만 일치하면 모든 금액대의 공고를 수집합니다.")
+    parser = argparse.ArgumentParser(description="디스코드 통합 알리미 (나라장터 & 뉴스)")
+    parser.add_argument(
+        "--target",
+        choices=["all", "koneps", "news"],
+        default="all",
+        help="실행할 크롤러 대상 선택 (all: 전체, koneps: 나라장터만, news: 뉴스만, 기본: all)",
+    )
+    parser.add_argument("--test-webhook", action="store_true", help="가상 카드를 전송하여 디스코드 웹훅을 테스트합니다.")
+    parser.add_argument("--dry-run", action="store_true", help="실제 전송 없이 수집/필터링 결과만 콘솔에 출력합니다.")
+    parser.add_argument("--force", action="store_true", help="중복 체크를 무시하고 강제 전송합니다.")
+    parser.add_argument("--no-price-filter", action="store_true", help="나라장터 금액 필터를 해제합니다.")
     parser.add_argument("--lookback", type=int, default=None, help="과거 며칠 전부터 조회할지 일수 지정 (기본: .env 설정값 또는 1일)")
-    parser.add_argument("--interval", type=int, default=None, help="주기적 자동 실행 간격(분 단위). 지정 시 해당 분마다 무한 반복 실행합니다.")
+    parser.add_argument("--interval", type=int, default=None, help="주기적 자동 실행 간격(분). 지정 시 해당 분마다 무한 반복 실행합니다.")
     args = parser.parse_args()
 
-    # .env 파일 로드
     load_dotenv(override=True)
 
-    # 실행 간격 확인 (CLI 인자 또는 .env의 INTERVAL_MINUTES)
     interval = args.interval
     if interval is None:
         raw_interval = os.getenv("INTERVAL_MINUTES", "").strip()
         if raw_interval.isdigit() and int(raw_interval) > 0:
             interval = int(raw_interval)
 
-    # 1회 단발 실행 (기본 모드: GitHub Actions 또는 수동 실행)
+    # 단발 실행 모드 (GitHub Actions 또는 수동 1회 실행)
     if not interval or interval <= 0:
         execute_pipeline(args)
         return
 
     # 주기적 반복 실행 모드 (로컬 PC 백그라운드용)
-    logger.info("🔁 [주기적 실행 모드 시작] %d분마다 자동으로 공고를 수집합니다. (종료: Ctrl+C)", interval)
+    logger.info("🔁 [주기적 실행 모드 시작] %d분마다 자동으로 수집합니다. (종료: Ctrl+C)", interval)
     try:
         while True:
             execute_pipeline(args)
@@ -253,7 +157,7 @@ def main() -> None:
             logger.info("⏳ 다음 실행 예정 시각: %s (%d분 대기 중...)\n", next_time, interval)
             time.sleep(interval * 60)
     except KeyboardInterrupt:
-        logger.info("\n🛑 사용자에 의해 주기적 실행이 안전하게 종료되었습니다.")
+        logger.info("\n🛑 사용자에 의해 주기적 실행이 종료되었습니다.")
 
 
 if __name__ == "__main__":
