@@ -1,0 +1,53 @@
+name: 나라장터 공고 수집 및 디스코드 알리미
+
+on:
+  schedule:
+    # 한국 시간 기준: 평일(월~금) 오전 9시, 오후 1시, 오후 5시 자동 실행
+    # UTC 기준: 00:00 (KST 09:00), 04:00 (KST 13:00), 08:00 (KST 17:00)
+    - cron: '0 0,4,8 * * 1-5'
+  workflow_dispatch: # GitHub 웹 화면에서 'Run workflow' 버튼으로 수동 즉시 실행 가능
+
+permissions:
+  contents: write # sent_notices.json 중복방지 이력 자동 커밋 권한
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 저장소 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 3.11 환경 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 의존성 패키지 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 나라장터 공고 수집 및 디스코드 전송
+        env:
+          DATA_GO_KR_API_KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TARGET_KEYWORDS: ${{ vars.TARGET_KEYWORDS || '비전,머신비전,AI,인공지능,딥러닝,스마트,스마트팩토리,데이터,검사기,소프트웨어,SW' }}
+          ENABLE_PRICE_FILTER: ${{ vars.ENABLE_PRICE_FILTER || 'false' }}
+          MIN_PRICE: ${{ vars.MIN_PRICE || '50000000' }}
+          MAX_PRICE: ${{ vars.MAX_PRICE || '1000000000' }}
+          LOOKBACK_DAYS: '1'
+        run: |
+          python main.py
+
+      - name: 중복 알림 방지 이력 커밋 (sent_notices.json)
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -f sent_notices.json ]; then
+            git add -f sent_notices.json
+            git commit -m "chore: update sent notices history [skip ci]" || echo "No changes to commit"
+            git push || echo "Push skipped"
+          fi
+
