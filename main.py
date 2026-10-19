@@ -22,7 +22,7 @@ from common.history import HistoryManager
 from crawlers.arxiv import run_arxiv
 from crawlers.hackernews import run_hackernews
 from crawlers.koneps import run_koneps
-from crawlers.news import run_news
+from crawlers.news import RSS_FEEDS, run_news, run_rss_feed
 
 if sys.platform == "win32":
     try:
@@ -55,6 +55,13 @@ def get_webhook(target_type: str) -> str:
         )
     if target_type == "arxiv":
         return os.getenv("DISCORD_ARXIV_WEBHOOK_URL", "").strip() or common
+    if target_type in RSS_FEEDS:
+        config = RSS_FEEDS[target_type]
+        return (
+            os.getenv(config["webhook_env"], "").strip()
+            or os.getenv("DISCORD_NEWS_WEBHOOK_URL", "").strip()
+            or common
+        )
     return common
 
 
@@ -140,6 +147,27 @@ def send_mock_test_card(target: str = "all") -> None:
         else:
             logger.warning("⚠️ [Arxiv 논문] 웹훅 URL이 없어 테스트를 건너뜁니다.")
 
+    # 5. 추가 RSS/Atom 피드 카드 테스트
+    for source, config in RSS_FEEDS.items():
+        if target not in ("all", "news", source):
+            continue
+        url = get_webhook(source)
+        if not url:
+            logger.warning("[%s] 웹훅 URL이 없어 테스트를 건너뜁니다.", config["name"])
+            continue
+        mock_item = {
+            "title": f"[테스트] {config['name']} RSS 알림",
+            "url": config["url"],
+            "source": config["name"],
+            "summary": f"{config['name']} 피드의 테스트 알림입니다.",
+            "published_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        }
+        send_raw_webhook(url, {
+            "username": config["name"],
+            "embeds": [build_news_embed(mock_item)],
+        })
+        logger.info("[%s] 테스트 카드 전송 완료!", config["name"])
+
 
 def execute_pipeline(args: argparse.Namespace) -> None:
     """공통 이력 관리자 생성 및 선택된 크롤러 순차 실행"""
@@ -159,6 +187,7 @@ def execute_pipeline(args: argparse.Namespace) -> None:
         or os.getenv("DISCORD_NEWS_WEBHOOK_URL")
         or os.getenv("DISCORD_HN_WEBHOOK_URL")
         or os.getenv("DISCORD_ARXIV_WEBHOOK_URL")
+        or any(os.getenv(config["webhook_env"]) for config in RSS_FEEDS.values())
     )
     if not any_webhook and not args.dry_run:
         logger.error("디스코드 웹훅 URL이 하나도 설정되지 않았습니다. .env 파일을 확인해주세요.")
@@ -203,6 +232,15 @@ def execute_pipeline(args: argparse.Namespace) -> None:
         except Exception as e:
             logger.error("[Arxiv] 파이프라인 실행 중 오류: %s", e)
 
+    # 5. 추가 RSS/Atom 피드
+    for source, config in RSS_FEEDS.items():
+        if args.target not in ("all", "news", source):
+            continue
+        try:
+            total_sent += run_rss_feed(source, args, get_webhook(source), history_mgr)
+        except Exception as e:
+            logger.error("[%s] 파이프라인 실행 중 오류: %s", config["name"], e)
+
     # 5. 전송 이력 저장
     history_mgr.save()
     logger.info("==========================================")
@@ -211,12 +249,12 @@ def execute_pipeline(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="디스코드 통합 알리미 (나라장터, 긱뉴스, 해커뉴스, Arxiv)")
+    parser = argparse.ArgumentParser(description="디스코드 통합 알리미 (나라장터, 뉴스, AI 논문)")
     parser.add_argument(
         "--target",
-        choices=["all", "koneps", "news", "geeknews", "hackernews", "arxiv"],
+        choices=["all", "koneps", "news", "geeknews", "hackernews", "arxiv", *RSS_FEEDS],
         default="all",
-        help="실행 대상 선택 (all: 전체, news: 뉴스전체, geeknews: 긱뉴스만, hackernews: 해커뉴스만, arxiv: AI논문만, koneps: 나라장터만, 기본: all)",
+        help="실행 대상 선택 (all: 전체, news: 전체 뉴스 피드, 각 피드 키: 개별 실행, arxiv: AI논문, koneps: 나라장터)",
     )
     parser.add_argument("--test-webhook", action="store_true", help="가상 카드를 전송하여 디스코드 웹훅을 테스트합니다.")
     parser.add_argument("--dry-run", action="store_true", help="실제 전송 없이 수집/필터링 결과만 콘솔에 출력합니다.")

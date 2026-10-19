@@ -1,6 +1,6 @@
-# 📢 디스코드 통합 알리미 (나라장터 공고 & IT 뉴스)
+# 📢 디스코드 통합 알리미 (나라장터 공고 & 테크 뉴스)
 
-공공데이터포털의 **'조달청 나라장터 입찰공고'** 및 **'IT/AI 최신 뉴스'**를 정해진 시간마다 자동 수집하여 **디스코드 웹훅(Discord Webhook)**으로 예쁜 카드 뉴스(Embed) 형태로 전송하는 통합 알리미 봇 프로젝트입니다.
+공공데이터포털의 **조달청 나라장터 입찰공고**, 긱뉴스·Hacker News, OpenAI News·Simon Willison·Lobsters RSS/Atom 피드, Arxiv 논문을 정해진 시간마다 수집하여 **디스코드 웹훅(Discord Webhook)**으로 Embed 형태로 전송합니다. 각 뉴스 소스는 서로 다른 Discord 채널로 분리할 수 있습니다.
 
 퇴근 후 PC를 꺼두어도 **GitHub Actions(무료 크론 스케줄러)**를 통해 정해진 시간마다 자동으로 공고와 뉴스를 수집하여 디스코드로 전송합니다.
 
@@ -14,7 +14,9 @@ workspace_dicobot/
 │   └── koneps_notifier.yml   # [GitHub Actions] 매일 자동 실행 크론 워크플로우 (Node 24 호환)
 ├── crawlers/                 # [크롤러 모음]
 │   ├── koneps.py             # 나라장터 공고 수집 및 키워드/금액 스마트 필터
-│   └── news.py               # IT/AI 뉴스 수집 모듈 (기획서 반영 대기 템플릿)
+│   ├── news.py               # 긱뉴스 및 OpenAI/Simon Willison/Lobsters RSS·Atom
+│   ├── hackernews.py        # Hacker News 인기글
+│   └── arxiv.py             # AI/컴퓨터 비전 논문
 ├── common/                   # [공통 모듈]
 │   ├── discord_webhook.py    # 공통 디스코드 카드 뉴스(Embed) 포맷팅 및 웹훅 전송기
 │   └── history.py            # 크롤러별 중복 방지 이력 관리자 (sent_history.json)
@@ -36,8 +38,14 @@ workspace_dicobot/
 # 1. 디스코드 웹훅 URL (필수)
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
 
-# (선택) 뉴스 전용 채널로 분리하고 싶을 때만 입력 (비워두면 위의 DISCORD_WEBHOOK_URL로 함께 전송)
+# (선택) 기본 뉴스 웹훅. 소스별 웹훅 미설정 시 적용
 DISCORD_NEWS_WEBHOOK_URL=
+
+# (선택) 피드별 개별 채널 웹훅. 비워두면 DISCORD_NEWS_WEBHOOK_URL,
+# 그것도 비어 있으면 DISCORD_WEBHOOK_URL을 사용
+DISCORD_OPENAI_WEBHOOK_URL=
+DISCORD_SIMON_WILLISON_WEBHOOK_URL=
+DISCORD_LOBSTERS_WEBHOOK_URL=
 
 # 2. 나라장터 공공데이터포털 API 인증키
 DATA_GO_KR_API_KEY=발급받은_인증키_입력
@@ -48,6 +56,11 @@ ENABLE_PRICE_FILTER=false
 MIN_PRICE=50000000
 MAX_PRICE=1000000000
 LOOKBACK_DAYS=1
+
+# 피드별 수집 개수 (기본 5)
+OPENAI_LIMIT=5
+SIMON_WILLISON_LIMIT=5
+LOBSTERS_LIMIT=5
 ```
 
 ---
@@ -76,6 +89,11 @@ python main.py --target koneps
 
 # 뉴스만 실행
 python main.py --target news
+
+# 새 RSS/Atom 피드만 실행
+python main.py --target openai
+python main.py --target simonwillison
+python main.py --target lobsters
 ```
 
 ### 3) 디스코드 전송 없이 수집 결과만 콘솔로 확인 (Dry Run)
@@ -97,6 +115,7 @@ python main.py --interval 60
 * `DATA_GO_KR_API_KEY`: 공공데이터포털 인증키
 * `DISCORD_WEBHOOK_URL`: 디스코드 웹훅 주소
 * `DISCORD_NEWS_WEBHOOK_URL`: (선택) 뉴스 전용 웹훅 주소
+* `DISCORD_OPENAI_WEBHOOK_URL`, `DISCORD_SIMON_WILLISON_WEBHOOK_URL`, `DISCORD_LOBSTERS_WEBHOOK_URL`: (선택) 피드별 전용 웹훅 주소
 
 스케줄 설정([`koneps_notifier.yml`](.github/workflows/koneps_notifier.yml)):
 * **한국 시간 기준 평일(월~금) 오전 9시, 오후 1시, 오후 5시**에 `python main.py --target all` 자동 실행
