@@ -1,0 +1,35 @@
+{
+  "categories": {
+    "koneps": [
+      "R26BK01776982_000",
+      "R26BK01777466_000",
+      "R26BK01777457_000",
+      "R26BK01775790_000",
+      "R26BK01777007_000",
+      "R26BK01777349_000",
+      "R26BK01777116_000"
+    ],
+    "geeknews": [
+      "https://news.hada.io/topic?id=35626",
+      "https://news.hada.io/topic?id=35630",
+      "https://news.hada.io/topic?id=35627",
+      "https://news.hada.io/topic?id=35631",
+      "https://news.hada.io/topic?id=35628"
+    ],
+    "hackernews": [
+      "hn_50145337",
+      "hn_50136150",
+      "hn_50146625",
+      "hn_50131315",
+      "hn_50149392"
+    ],
+    "arxiv": [
+      "https://arxiv.org/abs/2610.22403",
+      "https://arxiv.org/abs/2610.22373",
+      "https://arxiv.org/abs/2610.22400",
+      "https://arxiv.org/abs/2610.22408",
+      "https://arxiv.org/abs/2610.22420"
+    ]
+  },
+  "updated_at": "2026-10-19T08:26:29.830360"
+}
