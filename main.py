@@ -21,6 +21,7 @@ from common.discord_webhook import (
 from common.history import HistoryManager
 from crawlers.arxiv import run_arxiv
 from crawlers.hackernews import run_hackernews
+from crawlers.huggingface import run_huggingface
 from crawlers.koneps import run_koneps
 from crawlers.news import RSS_FEEDS, run_news, run_rss_feed
 
@@ -55,6 +56,8 @@ def get_webhook(target_type: str) -> str:
         )
     if target_type == "arxiv":
         return os.getenv("DISCORD_ARXIV_WEBHOOK_URL", "").strip() or common
+    if target_type == "huggingface":
+        return os.getenv("DISCORD_HUGGINGFACE_WEBHOOK_URL", "").strip() or common
     if target_type in RSS_FEEDS:
         config = RSS_FEEDS[target_type]
         return (
@@ -147,7 +150,28 @@ def send_mock_test_card(target: str = "all") -> None:
         else:
             logger.warning("⚠️ [Arxiv 논문] 웹훅 URL이 없어 테스트를 건너뜁니다.")
 
-    # 5. 추가 RSS/Atom 피드 카드 테스트
+    # 5. Hugging Face Daily Papers 카드 테스트
+    if target in ("all", "huggingface"):
+        url = get_webhook("huggingface")
+        if url:
+            mock_paper = {
+                "title": "[테스트] Hugging Face Daily Papers",
+                "url": "https://huggingface.co/papers/2610.12345",
+                "category": "Daily Paper",
+                "authors": ["홍길동", "Jane Smith"],
+                "abstract": "Hugging Face Daily Papers REST API에서 제공하는 논문 알림 테스트입니다.",
+                "pdf_url": "https://arxiv.org/pdf/2610.12345.pdf",
+                "source": "Hugging Face Daily Papers",
+            }
+            send_raw_webhook(url, {
+                "username": "Hugging Face Daily Papers",
+                "embeds": [build_paper_embed(mock_paper)],
+            })
+            logger.info("✅ [Hugging Face Daily Papers] 테스트 카드 전송 완료!")
+        else:
+            logger.warning("⚠️ [Hugging Face Daily Papers] 웹훅 URL이 없어 테스트를 건너뜁니다.")
+
+    # 6. 추가 RSS/Atom 피드 카드 테스트
     for source, config in RSS_FEEDS.items():
         if target not in ("all", "news", source):
             continue
@@ -187,6 +211,7 @@ def execute_pipeline(args: argparse.Namespace) -> None:
         or os.getenv("DISCORD_NEWS_WEBHOOK_URL")
         or os.getenv("DISCORD_HN_WEBHOOK_URL")
         or os.getenv("DISCORD_ARXIV_WEBHOOK_URL")
+        or os.getenv("DISCORD_HUGGINGFACE_WEBHOOK_URL")
         or any(os.getenv(config["webhook_env"]) for config in RSS_FEEDS.values())
     )
     if not any_webhook and not args.dry_run:
@@ -232,7 +257,15 @@ def execute_pipeline(args: argparse.Namespace) -> None:
         except Exception as e:
             logger.error("[Arxiv] 파이프라인 실행 중 오류: %s", e)
 
-    # 5. 추가 RSS/Atom 피드
+    # 5. Hugging Face Daily Papers
+    if args.target in ("all", "huggingface"):
+        try:
+            sent = run_huggingface(args, get_webhook("huggingface"), history_mgr)
+            total_sent += sent
+        except Exception as e:
+            logger.error("[Hugging Face] 파이프라인 실행 중 오류: %s", e)
+
+    # 6. 추가 RSS/Atom 피드
     for source, config in RSS_FEEDS.items():
         if args.target not in ("all", "news", source):
             continue
@@ -252,9 +285,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="디스코드 통합 알리미 (나라장터, 뉴스, AI 논문)")
     parser.add_argument(
         "--target",
-        choices=["all", "koneps", "news", "geeknews", "hackernews", "arxiv", *RSS_FEEDS],
+        choices=["all", "koneps", "news", "geeknews", "hackernews", "arxiv", "huggingface", *RSS_FEEDS],
         default="all",
-        help="실행 대상 선택 (all: 전체, news: 전체 뉴스 피드, 각 피드 키: 개별 실행, arxiv: AI논문, koneps: 나라장터)",
+        help="실행 대상 선택 (all: 전체, news: 전체 뉴스 피드, arxiv/huggingface: 논문, koneps: 나라장터)",
     )
     parser.add_argument("--test-webhook", action="store_true", help="가상 카드를 전송하여 디스코드 웹훅을 테스트합니다.")
     parser.add_argument("--dry-run", action="store_true", help="실제 전송 없이 수집/필터링 결과만 콘솔에 출력합니다.")

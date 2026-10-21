@@ -1,6 +1,6 @@
 # 📢 디스코드 통합 알리미 (나라장터 공고 & 테크 뉴스)
 
-공공데이터포털의 **조달청 나라장터 입찰공고**, 긱뉴스·Hacker News, OpenAI News·Simon Willison·Lobsters RSS/Atom 피드, Arxiv 논문을 정해진 시간마다 수집하여 **디스코드 웹훅(Discord Webhook)**으로 Embed 형태로 전송합니다. 각 뉴스 소스는 서로 다른 Discord 채널로 분리할 수 있습니다.
+공공데이터포털의 **조달청 나라장터 입찰공고**, 긱뉴스·Hacker News, OpenAI News·Simon Willison·Lobsters RSS/Atom 피드, Arxiv 및 Hugging Face Daily Papers 논문을 정해진 시간마다 수집하여 **디스코드 웹훅(Discord Webhook)**으로 Embed 형태로 전송합니다. 각 뉴스 소스는 서로 다른 Discord 채널로 분리할 수 있습니다.
 
 퇴근 후 PC를 꺼두어도 **GitHub Actions(무료 크론 스케줄러)**를 통해 정해진 시간마다 자동으로 공고와 뉴스를 수집하여 디스코드로 전송합니다.
 
@@ -16,7 +16,8 @@ workspace_dicobot/
 │   ├── koneps.py             # 나라장터 공고 수집 및 키워드/금액 스마트 필터
 │   ├── news.py               # 긱뉴스 및 OpenAI/Simon Willison/Lobsters RSS·Atom
 │   ├── hackernews.py        # Hacker News 인기글
-│   └── arxiv.py             # AI/컴퓨터 비전 논문
+│   ├── arxiv.py             # AI/컴퓨터 비전 논문
+│   └── huggingface.py       # Hugging Face Daily Papers REST API
 ├── common/                   # [공통 모듈]
 │   ├── discord_webhook.py    # 공통 디스코드 카드 뉴스(Embed) 포맷팅 및 웹훅 전송기
 │   └── history.py            # 크롤러별 중복 방지 이력 관리자 (sent_history.json)
@@ -46,6 +47,7 @@ DISCORD_NEWS_WEBHOOK_URL=
 DISCORD_OPENAI_WEBHOOK_URL=
 DISCORD_SIMON_WILLISON_WEBHOOK_URL=
 DISCORD_LOBSTERS_WEBHOOK_URL=
+DISCORD_HUGGINGFACE_WEBHOOK_URL=
 
 # 2. 나라장터 공공데이터포털 API 인증키
 DATA_GO_KR_API_KEY=발급받은_인증키_입력
@@ -61,6 +63,11 @@ LOOKBACK_DAYS=1
 OPENAI_LIMIT=5
 SIMON_WILLISON_LIMIT=5
 LOBSTERS_LIMIT=5
+
+# Hugging Face Daily Papers (기본 5개, 날짜/키워드는 선택)
+HF_DAILY_PAPERS_LIMIT=5
+HF_DAILY_PAPERS_DATE=
+# HF_DAILY_PAPERS_KEYWORDS=vision,llm,diffusion
 ```
 
 ---
@@ -94,6 +101,7 @@ python main.py --target news
 python main.py --target openai
 python main.py --target simonwillison
 python main.py --target lobsters
+python main.py --target huggingface
 ```
 
 ### 3) 디스코드 전송 없이 수집 결과만 콘솔로 확인 (Dry Run)
@@ -116,6 +124,9 @@ python main.py --interval 60
 * `DISCORD_WEBHOOK_URL`: 디스코드 웹훅 주소
 * `DISCORD_NEWS_WEBHOOK_URL`: (선택) 뉴스 전용 웹훅 주소
 * `DISCORD_OPENAI_WEBHOOK_URL`, `DISCORD_SIMON_WILLISON_WEBHOOK_URL`, `DISCORD_LOBSTERS_WEBHOOK_URL`: (선택) 피드별 전용 웹훅 주소
+* `DISCORD_HUGGINGFACE_WEBHOOK_URL`: (선택) Hugging Face 논문 전용 웹훅 주소
+
+Hugging Face Daily Papers API는 공개 읽기 API이므로 별도 API 키가 필요하지 않습니다. 날짜를 지정하지 않으면 API의 기본 최신 목록을 가져오며, `HF_DAILY_PAPERS_DATE`에 `YYYY-MM-DD`를 설정하면 해당 날짜를 조회합니다.
 
 스케줄 설정([`koneps_notifier.yml`](.github/workflows/koneps_notifier.yml)):
 * **한국 시간 기준 평일(월~금) 오전 9시, 오후 1시, 오후 5시**에 `python main.py --target all` 자동 실행
