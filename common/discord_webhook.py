@@ -178,7 +178,7 @@ def build_paper_embed(paper: Dict[str, Any]) -> Dict[str, Any]:
             {"name": "🏷️ 분야", "value": f"`{category}`", "inline": True},
             {"name": "📥 PDF 다운로드", "value": f"[PDF 바로 열기]({pdf_url})", "inline": True},
         ],
-        "footer": {"text": "Arxiv AI 논문 브리핑"},
+        "footer": {"text": paper.get("source", "Arxiv AI 논문 브리핑")},
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 

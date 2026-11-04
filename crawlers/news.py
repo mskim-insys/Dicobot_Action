@@ -1,6 +1,6 @@
 """
 crawlers/news.py
-디스코드 테크 뉴스 및 트렌드 수집기 (GeekNews RSS 연동)
+디스코드 테크 뉴스 및 트렌드 수집기 (GeekNews, OpenAI, Simon Willison, Lobsters)
 """
 
 import argparse
@@ -10,6 +10,7 @@ import time
 from typing import Any, Dict, List
 
 import feedparser
+import requests
 
 from common.discord_webhook import build_tech_trend_embed, send_raw_webhook
 from common.history import HistoryManager
@@ -17,6 +18,120 @@ from common.history import HistoryManager
 logger = logging.getLogger(__name__)
 
 GEEKNEWS_RSS_URL = "https://news.hada.io/rss/news"
+RSS_FEEDS = {
+    "openai": {
+        "name": "OpenAI News",
+        "url": "https://openai.com/news/rss.xml",
+        "webhook_env": "DISCORD_OPENAI_WEBHOOK_URL",
+        "limit_env": "OPENAI_LIMIT",
+    },
+    "simonwillison": {
+        "name": "Simon Willison's Blog",
+        "url": "https://simonwillison.net/atom/everything/",
+        "webhook_env": "DISCORD_SIMON_WILLISON_WEBHOOK_URL",
+        "limit_env": "SIMON_WILLISON_LIMIT",
+    },
+    "lobsters": {
+        "name": "Lobsters",
+        "url": "https://lobste.rs/rss",
+        "webhook_env": "DISCORD_LOBSTERS_WEBHOOK_URL",
+        "limit_env": "LOBSTERS_LIMIT",
+    },
+}
+
+
+def fetch_rss_feed(source: str, limit: int = 5) -> List[Dict[str, Any]]:
+    """지정된 RSS/Atom 피드에서 최신 항목을 가져옵니다."""
+    config = RSS_FEEDS[source]
+    feed_url = config["url"]
+    source_name = config["name"]
+    logger.info("[%s] RSS 피드 조회 중: %s", source_name, feed_url)
+
+    try:
+        response = requests.get(feed_url, timeout=15)
+        response.raise_for_status()
+        feed = feedparser.parse(response.content)
+        if feed.bozo and not feed.entries:
+            logger.warning("[%s] 피드 파싱 실패 또는 빈 응답: %s", source_name, feed.get("bozo_exception"))
+            return []
+
+        items: List[Dict[str, Any]] = []
+        for entry in feed.entries[:limit]:
+            link = entry.get("link", "")
+            item_id = entry.get("id") or entry.get("guid") or link
+            author = entry.get("author", "")
+            if isinstance(author, dict):
+                author = author.get("name", "")
+            items.append({
+                "id": item_id,
+                "title": entry.get("title", "제목 없음").strip(),
+                "url": link,
+                "summary": entry.get("summary") or entry.get("description", ""),
+                "published_at": entry.get("published") or entry.get("updated", ""),
+                "source": source_name,
+                "author": author,
+            })
+
+        logger.info("[%s] 최신 글 %d건 파싱 완료", source_name, len(items))
+        return items
+    except (requests.RequestException, ValueError) as exc:
+        logger.error("[%s] RSS 피드 수집 실패: %s", source_name, exc)
+        return []
+
+
+def run_rss_feed(
+    source: str,
+    args: argparse.Namespace,
+    webhook_url: str,
+    history_mgr: HistoryManager,
+) -> int:
+    """단일 RSS/Atom 피드 수집, 중복 제거 및 전송."""
+    config = RSS_FEEDS[source]
+    source_name = config["name"]
+    logger.info("--- [%s] 수집 시작 ---", source_name)
+
+    feed_webhook = os.getenv(config["webhook_env"], "").strip() or webhook_url
+    if not feed_webhook and not getattr(args, "dry_run", False):
+        logger.warning("[%s] 전송할 디스코드 웹훅 URL이 설정되지 않았습니다.", source_name)
+        return 0
+
+    limit = int(os.getenv(config["limit_env"], "5"))
+    items = fetch_rss_feed(source, limit=limit)
+
+    raw_keywords = os.getenv(f"{source.upper()}_KEYWORDS", "").strip()
+    if raw_keywords:
+        keywords = [keyword.strip().lower() for keyword in raw_keywords.split(",") if keyword.strip()]
+        items = [
+            item for item in items
+            if any(keyword in (item["title"] + " " + item["summary"]).lower() for keyword in keywords)
+        ]
+
+    to_send: List[Dict[str, Any]] = []
+    for item in items:
+        item_id = item.get("id") or item.get("url")
+        if not getattr(args, "force", False) and history_mgr.is_sent(source, item_id):
+            continue
+        to_send.append(item)
+
+    logger.info("[%s] 신규 전송 대상: %d건", source_name, len(to_send))
+    if getattr(args, "dry_run", False):
+        for idx, item in enumerate(to_send, 1):
+            print(f"  [{idx}] [{source_name}] {item['title']} | {item['url']}")
+        return len(to_send)
+
+    sent_count = 0
+    for item in to_send:
+        payload = {
+            "username": source_name,
+            "embeds": [build_tech_trend_embed(item)],
+        }
+        if send_raw_webhook(feed_webhook, payload):
+            sent_count += 1
+            history_mgr.mark_sent(source, item.get("id") or item.get("url"))
+        time.sleep(1.0)
+
+    logger.info("[%s] 완료: %d건 중 %d건 전송 성공", source_name, len(to_send), sent_count)
+    return sent_count
 
 
 def fetch_geeknews(limit: int = 5) -> List[Dict[str, Any]]:
