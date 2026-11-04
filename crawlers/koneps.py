@@ -20,6 +20,27 @@ logger = logging.getLogger(__name__)
 KONEPS_BASE_URL = "https://apis.data.go.kr/1230000/ad/BidPublicInfoService/getBidPblancListInfoServcPPSSrch"
 KONEPS_FALLBACK_URL = "https://apis.data.go.kr/1230000/ad/BidPublicInfoService/getBidPblancListInfoServc"
 
+KONEPS_TAG_GROUPS = {
+    "manufacturing": {
+        "name": "제조업 검사 자동화",
+        "keywords_env": "KONEPS_MANUFACTURING_KEYWORDS",
+        "webhook_env": "DISCORD_KONEPS_MANUFACTURING_WEBHOOK_URL",
+        "default_keywords": ["외관검사", "머신비전", "스마트공장", "불량 선별", "조립 검사", "제조 AI"],
+    },
+    "foreign_worker": {
+        "name": "외국인 근로자 / 인력 매칭",
+        "keywords_env": "KONEPS_FOREIGN_WORKER_KEYWORDS",
+        "webhook_env": "DISCORD_KONEPS_FOREIGN_WORKER_WEBHOOK_URL",
+        "default_keywords": ["외국인 근로자", "계절근로자", "E-8", "인력중개", "근태관리", "노무 도급", "일자리 매칭"],
+    },
+    "industrial_safety": {
+        "name": "중대재해 / 산업 안전",
+        "keywords_env": "KONEPS_INDUSTRIAL_SAFETY_KEYWORDS",
+        "webhook_env": "DISCORD_KONEPS_INDUSTRIAL_SAFETY_WEBHOOK_URL",
+        "default_keywords": ["중대재해", "작업자 안전", "안전모 미착용", "끼임 방지", "위험구역 감시"],
+    },
+}
+
 
 def calculate_date_range(lookback_days: int = 1) -> Tuple[str, str]:
     """조회 기간 계산 (과거 N일 전 00:00부터 오늘 23:59까지, YYYYMMDDHHMM)"""
@@ -59,6 +80,36 @@ def format_price_krw(amount: int) -> str:
         return f"{amount:,}원"
 
     return " ".join(parts) + " 원"
+
+
+def get_koneps_tag_keywords() -> Dict[str, List[str]]:
+    """분류별 키워드를 환경변수에서 읽고, 미설정 시 기본 키워드를 사용합니다."""
+    tag_keywords: Dict[str, List[str]] = {}
+    for tag, config in KONEPS_TAG_GROUPS.items():
+        raw_keywords = os.getenv(config["keywords_env"], ",".join(config["default_keywords"]))
+        tag_keywords[tag] = [keyword.strip() for keyword in raw_keywords.split(",") if keyword.strip()]
+    return tag_keywords
+
+
+def get_notice_webhook_routes(
+    notice: Dict[str, Any],
+    default_webhook_url: str,
+) -> Dict[str, List[str]]:
+    """공고 분류에 맞는 웹훅을 URL별로 묶어, 동일 채널 중복 전송을 방지합니다."""
+    matched_tags = notice.get("matched_tag_ids", [])
+    route_tags = matched_tags if matched_tags else ["koneps"]
+    routes: Dict[str, List[str]] = {}
+
+    for tag in route_tags:
+        config = KONEPS_TAG_GROUPS.get(tag)
+        webhook_url = default_webhook_url
+        if config:
+            webhook_url = os.getenv(config["webhook_env"], "").strip() or default_webhook_url
+        if webhook_url:
+            route_id = f"koneps_{tag}" if config else "koneps"
+            routes.setdefault(webhook_url, []).append(route_id)
+
+    return routes
 
 
 def fetch_bid_notices(
@@ -144,22 +195,41 @@ def filter_bid_notices(
     min_price: int = 0,
     max_price: int = 0,
     enable_price_filter: bool = True,
+    tag_keywords: Optional[Dict[str, List[str]]] = None,
 ) -> List[Dict[str, Any]]:
     """수집된 공고 목록에서 키워드와 금액 조건을 충족하는 공고를 필터링합니다."""
     if keywords is None:
         keywords = ["비전", "AI", "머신비전", "인공지능", "딥러닝", "스마트", "스마트팩토리", "데이터", "검사기", "소프트웨어", "SW"]
 
-    cleaned_keywords = [k.strip().lower() for k in keywords if k.strip()]
+    if tag_keywords is None:
+        tag_keywords = {
+            tag: config["default_keywords"]
+            for tag, config in KONEPS_TAG_GROUPS.items()
+        }
+
+    all_keywords = list(dict.fromkeys(
+        [keyword.strip() for keyword in keywords if keyword.strip()]
+        + [keyword for group in tag_keywords.values() for keyword in group]
+    ))
+    cleaned_keywords = [k.lower() for k in all_keywords]
     filtered: List[Dict[str, Any]] = []
 
     for item in items:
         title = item.get("bidNtceNm", "")
         title_lower = title.lower()
 
-        matched = [k for k in cleaned_keywords if k in title_lower]
+        matched = [
+            keyword for keyword, cleaned_keyword in zip(all_keywords, cleaned_keywords)
+            if cleaned_keyword in title_lower
+        ]
         if not matched:
             continue
 
+        matched_tag_ids = [
+            tag
+            for tag, tag_group_keywords in tag_keywords.items()
+            if any(keyword.lower() in title_lower for keyword in tag_group_keywords)
+        ]
         raw_price = item.get("presmptPrce") or item.get("asignBdgtAmt") or 0
         price = parse_price(raw_price)
 
@@ -171,6 +241,8 @@ def filter_bid_notices(
 
         item_copy = dict(item)
         item_copy["matched_keywords"] = matched
+        item_copy["matched_tag_ids"] = matched_tag_ids
+        item_copy["matched_tags"] = [KONEPS_TAG_GROUPS[tag]["name"] for tag in matched_tag_ids]
         item_copy["parsed_price"] = price
         item_copy["formatted_price"] = format_price_krw(price)
 
@@ -200,7 +272,12 @@ def run_koneps(
 ) -> int:
     """나라장터 공고 수집, 필터링, 중복 확인 및 웹훅 전송 파이프라인 실행"""
     target_webhook = os.getenv("DISCORD_KONEPS_WEBHOOK_URL", "").strip() or webhook_url
-    if not target_webhook and not getattr(args, "dry_run", False):
+    tag_keywords = get_koneps_tag_keywords()
+    tag_webhooks = [
+        os.getenv(config["webhook_env"], "").strip()
+        for config in KONEPS_TAG_GROUPS.values()
+    ]
+    if not target_webhook and not any(tag_webhooks) and not getattr(args, "dry_run", False):
         logger.warning("[나라장터] 전송할 디스코드 웹훅 URL이 설정되지 않았습니다.")
         return 0
 
@@ -211,6 +288,9 @@ def run_koneps(
 
     raw_keywords = os.getenv("TARGET_KEYWORDS", "비전,머신비전,AI,인공지능,딥러닝,스마트,스마트팩토리,데이터,검사기,소프트웨어,SW")
     keywords = [k.strip() for k in raw_keywords.split(",") if k.strip()]
+    search_keywords = list(dict.fromkeys(
+        keywords + [keyword for group in tag_keywords.values() for keyword in group]
+    ))
 
     raw_enable_price = os.getenv("ENABLE_PRICE_FILTER", "true").strip().lower()
     enable_price_filter = raw_enable_price in ("true", "1", "yes", "y")
@@ -242,36 +322,62 @@ def run_koneps(
 
     matched_notices = filter_bid_notices(
         items=raw_items,
-        keywords=keywords,
+        keywords=search_keywords,
         min_price=min_price,
         max_price=max_price,
         enable_price_filter=enable_price_filter,
+        tag_keywords=tag_keywords,
     )
     logger.info("[나라장터] 조건 필터 통과: %d건", len(matched_notices))
 
-    to_send: List[Dict[str, Any]] = []
+    to_send: List[Tuple[Dict[str, Any], Dict[str, List[str]]]] = []
     for notice in matched_notices:
         n_key = get_notice_key(notice)
         if not getattr(args, "force", False) and history_mgr.is_sent("koneps", n_key):
             continue
-        to_send.append(notice)
+        routes = get_notice_webhook_routes(notice, target_webhook)
+        if not routes:
+            logger.warning("[나라장터] 공고에 연결된 웹훅이 없습니다: %s", notice.get("bidNtceNm"))
+            continue
+
+        pending_routes = {
+            url: [
+                route_id for route_id in route_ids
+                if getattr(args, "force", False) or not history_mgr.is_sent(route_id, n_key)
+            ]
+            for url, route_ids in routes.items()
+        }
+        pending_routes = {url: route_ids for url, route_ids in pending_routes.items() if route_ids}
+        if pending_routes:
+            to_send.append((notice, pending_routes))
 
     logger.info("[나라장터] 신규 전송 대상: %d건", len(to_send))
 
     if getattr(args, "dry_run", False):
         logger.info("[Dry Run] 디스코드 전송 생략 (콘솔 출력):")
-        for idx, n in enumerate(to_send, 1):
-            print(f"  [{idx}] {n.get('bidNtceNm')} | {n.get('formatted_price')} | {n.get('bidNtceDtlUrl')}")
+        for idx, (notice, routes) in enumerate(to_send, 1):
+            print(
+                f"  [{idx}] {notice.get('bidNtceNm')} | "
+                f"분류: {', '.join(notice.get('matched_tags', [])) or '기본'} | "
+                f"전송 채널: {len(routes)} | {notice.get('formatted_price')} | "
+                f"{notice.get('bidNtceDtlUrl')}"
+            )
         return len(to_send)
 
     sent_count = 0
-    for notice in to_send:
-        if send_notice_webhook(target_webhook, notice):
-            sent_count += 1
-            n_key = get_notice_key(notice)
-            if n_key:
-                history_mgr.mark_sent("koneps", n_key)
+    for notice, routes in to_send:
+        n_key = get_notice_key(notice)
+        all_routes_sent = True
+        for webhook_url, route_ids in routes.items():
+            if send_notice_webhook(webhook_url, notice):
+                sent_count += 1
+                for route_id in route_ids:
+                    if n_key:
+                        history_mgr.mark_sent(route_id, n_key)
+            else:
+                all_routes_sent = False
+        if n_key and all_routes_sent:
+            history_mgr.mark_sent("koneps", n_key)
 
-    logger.info("[나라장터] 완료: %d건 중 %d건 전송 성공", len(to_send), sent_count)
+    logger.info("[나라장터] 완료: %d건 중 %d개 채널 전송 성공", len(to_send), sent_count)
     return sent_count
-

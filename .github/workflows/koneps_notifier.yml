@@ -2,9 +2,10 @@ name: 나라장터 및 모닝 브리핑(뉴스 & 논문) 디스코드 알리미
 
 on:
   schedule:
-    # 한국 시간 기준: 평일(월~금) 오전 9시, 오후 1시, 오후 5시 자동 실행
-    # UTC 기준: 00:00 (KST 09:00), 04:00 (KST 13:00), 08:00 (KST 17:00)
-    - cron: '0 0,4,8 * * 1-5'
+    # 한국 시간 기준: 평일(월~금) 오전 8시, 오후 12시, 오후 4시 자동 실행
+    # UTC 기준: 일~목 23:00 (다음 날 KST 08:00), 월~금 03:00 (KST 12:00), 07:00 (KST 16:00)
+    - cron: '0 23 * * 0-4'
+    - cron: '0 3,7 * * 1-5'
   workflow_dispatch: # GitHub 웹 화면에서 'Run workflow' 버튼으로 수동 즉시 실행 가능
 
 permissions:
@@ -34,6 +35,9 @@ jobs:
           DATA_GO_KR_API_KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_KONEPS_WEBHOOK_URL: ${{ secrets.DISCORD_KONEPS_WEBHOOK_URL }}
+          DISCORD_KONEPS_MANUFACTURING_WEBHOOK_URL: ${{ secrets.DISCORD_KONEPS_MANUFACTURING_WEBHOOK_URL }}
+          DISCORD_KONEPS_FOREIGN_WORKER_WEBHOOK_URL: ${{ secrets.DISCORD_KONEPS_FOREIGN_WORKER_WEBHOOK_URL }}
+          DISCORD_KONEPS_INDUSTRIAL_SAFETY_WEBHOOK_URL: ${{ secrets.DISCORD_KONEPS_INDUSTRIAL_SAFETY_WEBHOOK_URL }}
           DISCORD_NEWS_WEBHOOK_URL: ${{ secrets.DISCORD_NEWS_WEBHOOK_URL }}
           DISCORD_HN_WEBHOOK_URL: ${{ secrets.DISCORD_HN_WEBHOOK_URL }}
           DISCORD_ARXIV_WEBHOOK_URL: ${{ secrets.DISCORD_ARXIV_WEBHOOK_URL }}
@@ -41,7 +45,18 @@ jobs:
           DISCORD_OPENAI_WEBHOOK_URL: ${{ secrets.DISCORD_OPENAI_WEBHOOK_URL }}
           DISCORD_SIMON_WILLISON_WEBHOOK_URL: ${{ secrets.DISCORD_SIMON_WILLISON_WEBHOOK_URL }}
           DISCORD_LOBSTERS_WEBHOOK_URL: ${{ secrets.DISCORD_LOBSTERS_WEBHOOK_URL }}
+          ENABLE_KONEPS: ${{ vars.ENABLE_KONEPS || 'true' }}
+          ENABLE_GEEKNEWS: ${{ vars.ENABLE_GEEKNEWS || 'true' }}
+          ENABLE_HACKERNEWS: ${{ vars.ENABLE_HACKERNEWS || 'true' }}
+          ENABLE_ARXIV: ${{ vars.ENABLE_ARXIV || 'true' }}
+          ENABLE_HUGGINGFACE: ${{ vars.ENABLE_HUGGINGFACE || 'true' }}
+          ENABLE_OPENAI: ${{ vars.ENABLE_OPENAI || 'true' }}
+          ENABLE_SIMON_WILLISON: ${{ vars.ENABLE_SIMON_WILLISON || 'true' }}
+          ENABLE_LOBSTERS: ${{ vars.ENABLE_LOBSTERS || 'true' }}
           TARGET_KEYWORDS: ${{ vars.TARGET_KEYWORDS || '비전,머신비전,AI,인공지능,딥러닝,스마트,스마트팩토리,데이터,검사기,소프트웨어,SW' }}
+          KONEPS_MANUFACTURING_KEYWORDS: ${{ vars.KONEPS_MANUFACTURING_KEYWORDS || '외관검사,머신비전,스마트공장,불량 선별,조립 검사,제조 AI' }}
+          KONEPS_FOREIGN_WORKER_KEYWORDS: ${{ vars.KONEPS_FOREIGN_WORKER_KEYWORDS || '외국인 근로자,계절근로자,E-8,인력중개,근태관리,노무 도급,일자리 매칭' }}
+          KONEPS_INDUSTRIAL_SAFETY_KEYWORDS: ${{ vars.KONEPS_INDUSTRIAL_SAFETY_KEYWORDS || '중대재해,작업자 안전,안전모 미착용,끼임 방지,위험구역 감시' }}
           ENABLE_PRICE_FILTER: ${{ vars.ENABLE_PRICE_FILTER || 'false' }}
           MIN_PRICE: ${{ vars.MIN_PRICE || '50000000' }}
           MAX_PRICE: ${{ vars.MAX_PRICE || '1000000000' }}

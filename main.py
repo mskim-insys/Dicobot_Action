@@ -22,7 +22,7 @@ from common.history import HistoryManager
 from crawlers.arxiv import run_arxiv
 from crawlers.hackernews import run_hackernews
 from crawlers.huggingface import run_huggingface
-from crawlers.koneps import run_koneps
+from crawlers.koneps import KONEPS_TAG_GROUPS, get_notice_webhook_routes, run_koneps
 from crawlers.news import RSS_FEEDS, run_news, run_rss_feed
 
 if sys.platform == "win32":
@@ -39,6 +39,39 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger("DiscordBots")
+
+FEATURE_FLAG_ENVS = {
+    "koneps": "ENABLE_KONEPS",
+    "geeknews": "ENABLE_GEEKNEWS",
+    "hackernews": "ENABLE_HACKERNEWS",
+    "arxiv": "ENABLE_ARXIV",
+    "huggingface": "ENABLE_HUGGINGFACE",
+    "openai": "ENABLE_OPENAI",
+    "simonwillison": "ENABLE_SIMON_WILLISON",
+    "lobsters": "ENABLE_LOBSTERS",
+}
+
+
+def get_feature_flags() -> dict[str, bool]:
+    """환경변수로 각 수집 기능의 활성화 여부를 확인합니다."""
+    enabled = {}
+    for feature, env_name in FEATURE_FLAG_ENVS.items():
+        value = os.getenv(env_name, "true").strip().lower()
+        if value not in ("true", "false"):
+            logger.error("%s 값은 true 또는 false여야 합니다. 해당 기능을 비활성화합니다.", env_name)
+            enabled[feature] = False
+        else:
+            enabled[feature] = value == "true"
+    return enabled
+
+
+def get_selected_features(target: str) -> list[str]:
+    """CLI 타깃에 포함되는 개별 기능 목록을 반환합니다."""
+    if target == "all":
+        return list(FEATURE_FLAG_ENVS)
+    if target == "news":
+        return ["geeknews", "hackernews", *RSS_FEEDS]
+    return [target]
 
 
 def get_webhook(target_type: str) -> str:
@@ -68,35 +101,50 @@ def get_webhook(target_type: str) -> str:
     return common
 
 
-def send_mock_test_card(target: str = "all") -> None:
+def send_mock_test_card(target: str = "all", enabled_features: set[str] | None = None) -> None:
     """웹훅 연결 및 Embed 디자인 테스트용 가상 카드 전송"""
+    if enabled_features is None:
+        enabled_features = {
+            feature for feature, enabled in get_feature_flags().items() if enabled
+        }
+
     logger.info("디스코드 웹훅 테스트 카드를 전송합니다... (타깃: %s)", target)
 
     # 1. 나라장터 카드 테스트
-    if target in ("all", "koneps"):
+    if "koneps" in enabled_features and target in ("all", "koneps"):
         url = get_webhook("koneps")
-        if url:
-            mock_notice = {
-                "bidNtceNo": "20261019001",
-                "bidNtceOrd": "00",
-                "bidNtceNm": "[테스트] 2026년 AI 스마트팩토리 비전 검사 시스템 구축 용역",
-                "ntceInsttNm": "중소벤처기업진흥공단",
-                "dminsttNm": "스마트제조혁신추진단",
-                "presmptPrce": 250000000,
-                "formatted_price": "2억 5,000만 원",
-                "bidNtceDt": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                "bidClseDt": "2026-10-31 18:00",
-                "matched_keywords": ["머신비전", "AI", "스마트팩토리"],
-                "bidNtceDtlUrl": "https://www.g2b.go.kr",
-            }
+        mock_notice = {
+            "bidNtceNo": "20261019001",
+            "bidNtceOrd": "00",
+            "bidNtceNm": "[테스트] 나라장터 태그별 채널 분리",
+            "ntceInsttNm": "중소벤처기업진흥공단",
+            "dminsttNm": "스마트제조혁신추진단",
+            "presmptPrce": 250000000,
+            "formatted_price": "2억 5,000만 원",
+            "bidNtceDt": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "bidClseDt": "2026-10-31 18:00",
+            "matched_keywords": ["머신비전", "외국인 근로자", "중대재해"],
+            "matched_tag_ids": list(KONEPS_TAG_GROUPS),
+            "bidNtceDtlUrl": "https://www.g2b.go.kr",
+        }
+        routes = get_notice_webhook_routes(mock_notice, url)
+        if routes:
             embed = build_notice_embed(mock_notice)
-            send_raw_webhook(url, {"username": "나라장터 알리미", "embeds": [embed]})
-            logger.info("✅ [나라장터] 테스트 카드 전송 완료!")
+            payload = {"username": "나라장터 알리미", "embeds": [embed]}
+            success_count = sum(send_raw_webhook(route_url, payload) for route_url in routes)
+            if success_count == len(routes):
+                logger.info("✅ [나라장터] %d개 채널 테스트 카드 전송 완료!", success_count)
+            else:
+                logger.warning(
+                    "⚠️ [나라장터] 테스트 카드 %d/%d개 채널 전송 성공",
+                    success_count,
+                    len(routes),
+                )
         else:
             logger.warning("⚠️ [나라장터] 웹훅 URL이 없어 테스트를 건너뜁니다.")
 
     # 2. 테크 뉴스 (GeekNews) 카드 테스트
-    if target in ("all", "news", "geeknews"):
+    if "geeknews" in enabled_features and target in ("all", "news", "geeknews"):
         url = get_webhook("geeknews")
         if url:
             mock_news = {
@@ -113,7 +161,7 @@ def send_mock_test_card(target: str = "all") -> None:
             logger.warning("⚠️ [긱뉴스] 웹훅 URL이 없어 테스트를 건너뜁니다.")
 
     # 3. Hacker News 카드 테스트
-    if target in ("all", "news", "hackernews"):
+    if "hackernews" in enabled_features and target in ("all", "news", "hackernews"):
         url = get_webhook("hackernews")
         if url:
             mock_hn = {
@@ -133,7 +181,7 @@ def send_mock_test_card(target: str = "all") -> None:
             logger.warning("⚠️ [Hacker News] 웹훅 URL이 없어 테스트를 건너뜁니다.")
 
     # 4. Arxiv AI 논문 카드 테스트
-    if target in ("all", "arxiv"):
+    if "arxiv" in enabled_features and target in ("all", "arxiv"):
         url = get_webhook("arxiv")
         if url:
             mock_paper = {
@@ -151,7 +199,7 @@ def send_mock_test_card(target: str = "all") -> None:
             logger.warning("⚠️ [Arxiv 논문] 웹훅 URL이 없어 테스트를 건너뜁니다.")
 
     # 5. Hugging Face Daily Papers 카드 테스트
-    if target in ("all", "huggingface"):
+    if "huggingface" in enabled_features and target in ("all", "huggingface"):
         url = get_webhook("huggingface")
         if url:
             mock_paper = {
@@ -173,7 +221,7 @@ def send_mock_test_card(target: str = "all") -> None:
 
     # 6. 추가 RSS/Atom 피드 카드 테스트
     for source, config in RSS_FEEDS.items():
-        if target not in ("all", "news", source):
+        if source not in enabled_features or target not in ("all", "news", source):
             continue
         url = get_webhook(source)
         if not url:
@@ -197,23 +245,31 @@ def execute_pipeline(args: argparse.Namespace) -> None:
     """공통 이력 관리자 생성 및 선택된 크롤러 순차 실행"""
     load_dotenv(override=True)
 
+    feature_flags = get_feature_flags()
+    active_features = {
+        feature
+        for feature in get_selected_features(args.target)
+        if feature_flags.get(feature, False)
+    }
+
     common_webhook = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
 
     # 웹훅 단독 테스트 모드
     if args.test_webhook:
-        send_mock_test_card(target=args.target)
+        send_mock_test_card(target=args.target, enabled_features=active_features)
+        return
+
+    if not active_features:
+        logger.info("선택한 타깃의 모든 기능이 .env 설정으로 비활성화되어 있습니다.")
         return
 
     # 웹훅 유효성 검증 (dry-run이 아닐 때)
-    any_webhook = (
-        common_webhook
-        or os.getenv("DISCORD_KONEPS_WEBHOOK_URL")
-        or os.getenv("DISCORD_NEWS_WEBHOOK_URL")
-        or os.getenv("DISCORD_HN_WEBHOOK_URL")
-        or os.getenv("DISCORD_ARXIV_WEBHOOK_URL")
-        or os.getenv("DISCORD_HUGGINGFACE_WEBHOOK_URL")
-        or any(os.getenv(config["webhook_env"]) for config in RSS_FEEDS.values())
-    )
+    any_webhook = any(get_webhook(feature) for feature in active_features)
+    if "koneps" in active_features:
+        any_webhook = any_webhook or any(
+            os.getenv(config["webhook_env"], "").strip()
+            for config in KONEPS_TAG_GROUPS.values()
+        )
     if not any_webhook and not args.dry_run:
         logger.error("디스코드 웹훅 URL이 하나도 설정되지 않았습니다. .env 파일을 확인해주세요.")
         sys.exit(1)
@@ -226,7 +282,7 @@ def execute_pipeline(args: argparse.Namespace) -> None:
     logger.info("==========================================")
 
     # 1. 나라장터 공고 수집 실행
-    if args.target in ("all", "koneps"):
+    if "koneps" in active_features:
         try:
             sent = run_koneps(args, common_webhook, history_mgr)
             total_sent += sent
@@ -234,7 +290,7 @@ def execute_pipeline(args: argparse.Namespace) -> None:
             logger.error("[나라장터] 파이프라인 실행 중 오류: %s", e)
 
     # 2. 국내 테크 뉴스 (GeekNews) 수집 실행
-    if args.target in ("all", "news", "geeknews"):
+    if "geeknews" in active_features:
         try:
             sent = run_news(args, common_webhook, history_mgr)
             total_sent += sent
@@ -242,7 +298,7 @@ def execute_pipeline(args: argparse.Namespace) -> None:
             logger.error("[긱뉴스] 파이프라인 실행 중 오류: %s", e)
 
     # 3. 글로벌 테크 뉴스 (Hacker News) 수집 실행
-    if args.target in ("all", "news", "hackernews"):
+    if "hackernews" in active_features:
         try:
             sent = run_hackernews(args, common_webhook, history_mgr)
             total_sent += sent
@@ -250,7 +306,7 @@ def execute_pipeline(args: argparse.Namespace) -> None:
             logger.error("[HackerNews] 파이프라인 실행 중 오류: %s", e)
 
     # 4. Arxiv AI 논문 수집 실행 (cs.AI + cs.CV)
-    if args.target in ("all", "arxiv"):
+    if "arxiv" in active_features:
         try:
             sent = run_arxiv(args, common_webhook, history_mgr)
             total_sent += sent
@@ -258,7 +314,7 @@ def execute_pipeline(args: argparse.Namespace) -> None:
             logger.error("[Arxiv] 파이프라인 실행 중 오류: %s", e)
 
     # 5. Hugging Face Daily Papers
-    if args.target in ("all", "huggingface"):
+    if "huggingface" in active_features:
         try:
             sent = run_huggingface(args, get_webhook("huggingface"), history_mgr)
             total_sent += sent
@@ -267,7 +323,7 @@ def execute_pipeline(args: argparse.Namespace) -> None:
 
     # 6. 추가 RSS/Atom 피드
     for source, config in RSS_FEEDS.items():
-        if args.target not in ("all", "news", source):
+        if source not in active_features:
             continue
         try:
             total_sent += run_rss_feed(source, args, get_webhook(source), history_mgr)
