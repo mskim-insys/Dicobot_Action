@@ -90,7 +90,11 @@ def get_webhook(target_type: str) -> str:
     if target_type == "arxiv":
         return os.getenv("DISCORD_ARXIV_WEBHOOK_URL", "").strip() or common
     if target_type == "huggingface":
-        return os.getenv("DISCORD_HUGGINGFACE_WEBHOOK_URL", "").strip() or common
+        return (
+            os.getenv("DISCORD_HUGGINGFACE_WEBHOOK_URL", "").strip()
+            or os.getenv("DISCORD_ARXIV_WEBHOOK_URL", "").strip()
+            or common
+        )
     if target_type in RSS_FEEDS:
         config = RSS_FEEDS[target_type]
         return (
